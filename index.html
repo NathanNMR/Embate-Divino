@@ -48,9 +48,18 @@
   .deck-opt{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:4px;cursor:pointer;border:1px solid transparent;margin-bottom:6px;text-align:left;}
   .deck-opt:hover{background:#251c33;}
   .deck-opt.sel{border-color:var(--gold);background:#2a2036;}
+  .deck-opt.taken{opacity:.35;cursor:not-allowed;}
   .swatch{width:14px;height:14px;border-radius:50%;flex:0 0 auto;}
   .swatch.grego{background:var(--grego);} .swatch.nordico{background:var(--nordico);}
   .swatch.egipcio{background:var(--egipcio);} .swatch.japones{background:var(--japones);}
+
+  .coach-banner{
+    display:flex;gap:12px;align-items:flex-start;background:linear-gradient(180deg,#2a2036,#201931);
+    border:1px solid var(--gold);border-radius:6px;padding:12px 14px;margin-bottom:10px;
+  }
+  .coach-banner .icon{font-size:1.3rem;line-height:1;}
+  .coach-banner .txt{flex:1;font-size:.86rem;line-height:1.45;color:var(--ink);}
+  .coach-banner button{flex:0 0 auto;}
   button.primary{
     font-family:var(--font-display);
     background:linear-gradient(180deg,var(--gold-bright),var(--gold));
@@ -357,15 +366,25 @@ function makePlayer(name, mytho){
 }
 
 function startGame(m1, m2){
+  if(m1===m2){ alertGuardMsg('Escolha duas mitologias diferentes para os dois jogadores.'); return; }
   state = {
     players:[ makePlayer('Jogador 1', m1), makePlayer('Jogador 2', m2) ],
     turn:1, current:0, phase:'draw',
     log:[], pendingAttacker:null, showHandoff:true,
     consumedThisTurn:false,
+    guided: !!setupSel.guided,
+    coach: { shown: new Set() },
   };
   log(`Partida iniciada. ${DECKS[m1].name} vs ${DECKS[m2].name}.`);
   beginTurn(false);
   render();
+}
+
+function alertGuardMsg(msg){
+  // usado antes de 'state' existir (na tela de configuração)
+  window._guardMsg = msg;
+  render();
+  setTimeout(()=>{ window._guardMsg = null; render(); }, 2200);
 }
 
 function cur(){ return state.players[state.current]; }
@@ -897,6 +916,130 @@ function endGame(winnerIdx, reason){
   render();
 }
 
+// ---------- PARTIDA GUIADA (dicas contextuais) ----------
+const COACH_TIPS = [
+  { id:'welcome', when:()=> state.turn===1,
+    text:'Bem-vindo à Partida Guiada! Cada jogador começa com 20 PV — o objetivo é zerar o PV do adversário. Vamos começar pela Fase de Consumo.' },
+  { id:'consumo', when:()=> state.phase==='consumo',
+    text:'Fase de Consumo: você pode jogar 1 carta de bebida da mão (vira Libação permanente) ou sacrificar 1 tropa comum. É opcional — clique em "Avançar Fase →" quando terminar.' },
+  { id:'main', when:()=> state.phase==='main',
+    text:'Fase Principal: gaste Libação para invocar tropas ou conjurar feitiços da mão. O número no canto de cada carta é o custo.' },
+  { id:'tapped', when:()=> state.phase==='main' && cur().field.some(t=>t.tapped),
+    text:'Tropas recém-invocadas ficam "cansadas" (aparecem mais escuras) e não atacam neste turno — elas ficam prontas no seu próximo turno.' },
+  { id:'active_ability', when:()=> state.phase==='main' && cur().field.some(t=>t.active),
+    text:'Tropas com habilidade ativa mostram um botão dourado no campo. Use-o pagando a Libação extra indicada para ativar o efeito.' },
+  { id:'battle', when:()=> state.phase==='battle',
+    text:'Fase de Batalha: clique numa tropa não cansada do SEU campo para declará-la atacante. O oponente então escolhe bloquear com uma tropa dele ou levar o dano direto no PV.' },
+  { id:'graveyard', when:()=> cur().graveyard.length>0 || opp().graveyard.length>0,
+    text:'Cartas usadas ou destruídas vão para o Cemitério. Fique de olho nele — várias habilidades (como Anúbis, Ísis e Travessia do Estige) interagem com as cartas de lá.' },
+  { id:'ultimate', when:()=> cur().hand.some(c=>c.type==='ultimate'),
+    text:'Você tem uma Ultimate na mão! Ela é muito forte, mas só pode ser jogada depois que a condição especial escrita na carta for cumprida.' },
+  { id:'handoff', when:()=> state.turn>=2,
+    text:'Como o jogo é hotseat, cada troca de turno pede para "passar o dispositivo" — assim ninguém vê a mão do adversário sem querer.' },
+];
+
+function getCoachTip(){
+  if(!state || !state.guided || state.phase==='over') return null;
+  for(const t of COACH_TIPS){
+    if(!state.coach.shown.has(t.id) && t.when()) return t;
+  }
+  return null;
+}
+function dismissCoachTip(id){
+  state.coach.shown.add(id);
+  render();
+}
+function renderCoachBanner(){
+  const tip = getCoachTip();
+  if(!tip) return '';
+  return `<div class="coach-banner">
+    <div class="icon">🎓</div>
+    <div class="txt">${tip.text}</div>
+    <button class="secondary" onclick="dismissCoachTip('${tip.id}')">Entendi</button>
+  </div>`;
+}
+
+// ---------- TUTORIAL ----------
+let tutorialOpen = false;
+let tutorialStep = 0;
+
+const TUTORIAL_STEPS = [
+  {
+    title: 'Objetivo do jogo',
+    body: `Cada jogador escolhe um baralho de uma mitologia (Grega, Nórdica, Egípcia ou Japonesa) e começa com <b>20 Pontos de Vida (PV)</b>.
+    Vence quem reduzir o PV do oponente a 0 — ou quem sobrar de cartas quando o adversário não puder mais comprar.
+    A partida é jogada no mesmo dispositivo: os jogadores se revezam (hotseat).`
+  },
+  {
+    title: 'Tipos de carta',
+    body: `<ul>
+      <li><b>Consumo</b> (vinho, hidromel, cerveja, saquê) — seu recurso. Aumenta sua capacidade de <b>Libação</b>.</li>
+      <li><b>Tropa Comum</b> — barata, sem habilidade. Pode ser jogada em campo ou sacrificada como Consumo.</li>
+      <li><b>Tropa Especial</b> — heróis e divindades menores, com habilidade passiva ou ativa.</li>
+      <li><b>Deus</b> — a carta mais forte de invocação normal, geralmente o coração do baralho.</li>
+      <li><b>Feitiço</b> — resolve um efeito imediato sem precisar de uma tropa em campo.</li>
+      <li><b>Ultimate</b> — custo alto <u>e</u> uma condição própria do baralho que precisa ser cumprida antes de poder ser jogada.</li>
+    </ul>`
+  },
+  {
+    title: 'Fase de Consumo',
+    body: `No início do seu turno você pode <b>jogar 1 carta de bebida</b> (Consumo) ou <b>sacrificar 1 tropa comum da mão</b> — os dois aumentam permanentemente sua capacidade máxima de Libação.
+    Sua Libação atual se renova cheia a cada turno, como "cristais de mana". É opcional: você pode passar a fase sem consumir nada.`
+  },
+  {
+    title: 'Fase Principal',
+    body: `Aqui você gasta Libação para <b>invocar tropas</b> e <b>conjurar feitiços</b> da mão. Tropas ativas em campo com habilidade ativa mostram um botão próprio — cada ativação também custa Libação extra.
+    Tropas recém-invocadas ficam <b>cansadas</b> (não podem atacar neste turno) — exceto habilidades especiais como a de Hermes, que ataca assim que entra.`
+  },
+  {
+    title: 'Fase de Batalha',
+    body: `Clique em uma tropa não cansada para <b>declarar o ataque</b>. O oponente escolhe bloquear com uma tropa do campo dele, ou deixar o ataque acertar seu PV diretamente.
+    Em combate, o poder de cada tropa é comparado à Vida da outra — quem chega a 0 é destruído. Fique de olho em restrições especiais (tropas voadoras só bloqueiam voadoras, algumas tropas não podem ser bloqueadas por comuns, etc.).`
+  },
+  {
+    title: 'Cartas Ultimate',
+    body: `Cada baralho tem uma Ultimate própria (Tífon, Ragnarok, Julgamento de Anúbis, Espelho de Yata...). Além do custo alto de Libação, ela só pode ser jogada quando sua <b>condição especial</b> — descrita na própria carta — for cumprida durante a partida.`
+  },
+  {
+    title: 'Dicas rápidas',
+    body: `<ul>
+      <li>Use o botão <b>"Avançar Fase →"</b> para passar pelas etapas do seu turno.</li>
+      <li>O <b>cemitério</b> guarda cartas usadas ou destruídas — várias habilidades (como Anúbis e Ísis) interagem com ele.</li>
+      <li>Você pode reabrir este tutorial a qualquer momento pelo botão <b>"?"</b> no topo da tela.</li>
+    </ul>
+    Boa sorte, e que os deuses estejam a seu favor!`
+  },
+];
+
+function openTutorial(){ tutorialOpen = true; tutorialStep = 0; render(); }
+function closeTutorial(){ tutorialOpen = false; render(); }
+function tutorialGo(delta){
+  tutorialStep = Math.max(0, Math.min(TUTORIAL_STEPS.length-1, tutorialStep+delta));
+  render();
+}
+
+function renderTutorialModal(){
+  const s = TUTORIAL_STEPS[tutorialStep];
+  const isLast = tutorialStep === TUTORIAL_STEPS.length-1;
+  const dots = TUTORIAL_STEPS.map((_,i)=>`<span style="display:inline-block;width:7px;height:7px;border-radius:50%;margin:0 3px;background:${i===tutorialStep?'var(--gold-bright)':'#39304a'};"></span>`).join('');
+  return `<div class="modal-back" onclick="if(event.target===this) closeTutorial();">
+    <div class="modal" style="max-width:520px;">
+      <h3>${tutorialStep+1}. ${s.title}</h3>
+      <div style="font-size:.92rem;line-height:1.55;color:var(--ink);">${s.body}</div>
+      <div style="text-align:center;margin-top:14px;">${dots}</div>
+      <div class="opts" style="justify-content:space-between;">
+        <button class="secondary" onclick="closeTutorial()">Pular</button>
+        <div style="display:flex;gap:8px;">
+          ${tutorialStep>0 ? `<button class="secondary" onclick="tutorialGo(-1)">← Voltar</button>` : ''}
+          ${isLast
+            ? `<button class="primary" onclick="closeTutorial()">Entendi!</button>`
+            : `<button class="primary" onclick="tutorialGo(1)">Avançar →</button>`}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
 // ---------- UI HELPERS ----------
 function alertMsg(msg){
   state.notice = msg;
@@ -908,34 +1051,67 @@ function alertMsg(msg){
 const app = document.getElementById('app');
 
 function render(){
-  if(!state){ renderSetup(); return; }
-  if(state.phase==='over'){ renderGameOver(); return; }
-  if(state.showHandoff){ renderHandoff(); return; }
-  renderGame();
+  if(!state){ renderSetup(); }
+  else if(state.phase==='over'){ renderGameOver(); }
+  else if(state.showHandoff){ renderHandoff(); }
+  else { renderGame(); }
+  if(tutorialOpen){ app.insertAdjacentHTML('beforeend', renderTutorialModal()); }
 }
 
-let setupSel = {p1:null, p2:null};
+let setupSel = {p1:null, p2:null, guided:false};
 function renderSetup(){
-  const deckOpts = (playerKey)=> Object.keys(DECKS).map(k=>{
-    const d = DECKS[k];
-    const sel = setupSel[playerKey]===k ? 'sel':'';
-    return `<div class="deck-opt ${sel}" onclick="selectDeck('${playerKey}','${k}')">
-      <span class="swatch ${k}"></span> ${d.name} <span style="color:var(--ink-dim);font-size:.78rem;">(${d.drinkName})</span>
-    </div>`;
-  }).join('');
+  const deckOpts = (playerKey)=>{
+    const otherKey = playerKey==='p1' ? 'p2' : 'p1';
+    return Object.keys(DECKS).map(k=>{
+      const d = DECKS[k];
+      const sel = setupSel[playerKey]===k ? 'sel':'';
+      const taken = setupSel[otherKey]===k;
+      const cls = ['deck-opt', sel, taken?'taken':''].filter(Boolean).join(' ');
+      const click = taken ? '' : `onclick="selectDeck('${playerKey}','${k}')"`;
+      return `<div class="${cls}" ${click}>
+        <span class="swatch ${k}"></span> ${d.name} <span style="color:var(--ink-dim);font-size:.78rem;">(${d.drinkName})</span>
+        ${taken ? '<span style="margin-left:auto;font-size:.68rem;color:var(--ink-dim);">em uso</span>' : ''}
+      </div>`;
+    }).join('');
+  };
   app.innerHTML = `
     <div class="setup">
-      <h1>Panteão: A Guerra dos Mitos</h1>
-      <p class="sub">Um jogo de cartas entre panteões. Escolha um baralho para cada jogador — a partida é jogada no mesmo dispositivo (hotseat).</p>
+      <h1>Embate Divino</h1>
+      <p class="sub">Um jogo de cartas entre panteões. Escolha um baralho diferente para cada jogador — a partida é jogada no mesmo dispositivo (hotseat).</p>
+      ${window._guardMsg ? `<p style="color:#d98787;font-size:.9rem;">${window._guardMsg}</p>` : ''}
       <div class="picker-row">
         <div class="picker"><h3>Jogador 1</h3>${deckOpts('p1')}</div>
         <div class="picker"><h3>Jogador 2</h3>${deckOpts('p2')}</div>
       </div>
-      <button class="primary" ${(!setupSel.p1||!setupSel.p2)?'disabled':''} onclick="startGame(setupSel.p1, setupSel.p2)">Começar a Partida</button>
+      <div style="margin:6px 0 22px;">
+        <button class="secondary" onclick="randomizeDecks()">🎲 Sortear Baralhos</button>
+      </div>
+      <div class="deck-opt ${setupSel.guided?'sel':''}" style="max-width:420px;margin:0 auto 22px;text-align:left;" onclick="toggleGuided()">
+        <span style="font-size:1.1rem;">🎓</span>
+        <span>Ativar <b>Partida Guiada</b> — dicas contextuais explicam cada fase durante o jogo (ótimo para a primeira partida).</span>
+      </div>
+      <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+        <button class="primary" ${(!setupSel.p1||!setupSel.p2)?'disabled':''} onclick="startGame(setupSel.p1, setupSel.p2)">Começar a Partida</button>
+        <button class="secondary" onclick="openTutorial()">📖 Como Jogar</button>
+      </div>
     </div>
   `;
 }
-function selectDeck(who, key){ setupSel[who]=key; render(); }
+function selectDeck(who, key){
+  const other = who==='p1' ? 'p2' : 'p1';
+  if(setupSel[other]===key) return; // já está em uso pelo outro jogador
+  setupSel[who]=key;
+  render();
+}
+function randomizeDecks(){
+  const keys = Object.keys(DECKS);
+  const k1 = keys[Math.floor(Math.random()*keys.length)];
+  let k2;
+  do{ k2 = keys[Math.floor(Math.random()*keys.length)]; } while(k2===k1);
+  setupSel.p1 = k1; setupSel.p2 = k2;
+  render();
+}
+function toggleGuided(){ setupSel.guided = !setupSel.guided; render(); }
 
 function renderHandoff(){
   const p = cur();
@@ -943,7 +1119,9 @@ function renderHandoff(){
     <div class="handoff">
       <h2>Turno de ${p.name} — ${DECKS[p.mytho].name}</h2>
       <p>Passe o dispositivo para ${p.name} e confirme quando estiver pronto.</p>
+      ${state.guided ? `<div style="max-width:480px;margin:0 auto;">${renderCoachBanner()}</div>` : ''}
       <button class="primary" onclick="state.showHandoff=false; render();">Estou Pronto</button>
+      <div style="margin-top:14px;"><button class="secondary" onclick="openTutorial()">📖 Rever o tutorial</button></div>
     </div>
   `;
 }
@@ -1023,9 +1201,14 @@ function renderGame(){
 
   app.innerHTML = `
     <div class="topbar">
-      <div class="title">Panteão: A Guerra dos Mitos — Turno ${state.turn}</div>
-      <div class="phase-pill">Fase: ${phaseNames[state.phase]}</div>
+      <div class="title">Embate Divino — Turno ${state.turn}</div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div class="phase-pill">Fase: ${phaseNames[state.phase]}</div>
+        <button class="secondary" style="padding:4px 10px;border-radius:50%;" onclick="openTutorial()" title="Como jogar">?</button>
+      </div>
     </div>
+
+    ${renderCoachBanner()}
 
     <div class="player-strip opp">
       <div class="pname">${o.name} — ${DECKS[o.mytho].name}</div>
