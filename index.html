@@ -376,7 +376,7 @@ function startGame(m1, m2){
     coach: { shown: new Set() },
   };
   log(`Partida iniciada. ${DECKS[m1].name} vs ${DECKS[m2].name}.`);
-  beginTurn(false);
+  beginTurn(true);
   render();
 }
 
@@ -477,12 +477,13 @@ function tributeComum(cardUid){
   if(idx<0) return;
   const c = p.hand[idx];
   if(c.type!=='comum') return;
+  const gain = c.cost || 1;
   p.hand.splice(idx,1);
-  p.libMax += 1;
-  p.libCur += 1;
+  p.libMax += gain;
+  p.libCur += gain;
   p.graveyard.push(c);
   state.consumedThisTurn = true;
-  log(`${p.name} sacrifica ${c.name} como consumo (+1 de Libação).`);
+  log(`${p.name} sacrifica ${c.name} como consumo (+${gain} de Libação, equivalente ao custo da carta).`);
   render();
 }
 
@@ -921,7 +922,7 @@ const COACH_TIPS = [
   { id:'welcome', when:()=> state.turn===1,
     text:'Bem-vindo à Partida Guiada! Cada jogador começa com 20 PV — o objetivo é zerar o PV do adversário. Vamos começar pela Fase de Consumo.' },
   { id:'consumo', when:()=> state.phase==='consumo',
-    text:'Fase de Consumo: você pode jogar 1 carta de bebida da mão (vira Libação permanente) ou sacrificar 1 tropa comum. É opcional — clique em "Avançar Fase →" quando terminar.' },
+    text:'Fase de Consumo: você pode jogar 1 carta de bebida da mão (vira Libação permanente) ou sacrificar 1 tropa comum (ganha Libação igual ao custo dela). É opcional — clique em "Avançar Fase →" quando terminar.' },
   { id:'main', when:()=> state.phase==='main',
     text:'Fase Principal: gaste Libação para invocar tropas ou conjurar feitiços da mão. O número no canto de cada carta é o custo.' },
   { id:'tapped', when:()=> state.phase==='main' && cur().field.some(t=>t.tapped),
@@ -983,7 +984,7 @@ const TUTORIAL_STEPS = [
   },
   {
     title: 'Fase de Consumo',
-    body: `No início do seu turno você pode <b>jogar 1 carta de bebida</b> (Consumo) ou <b>sacrificar 1 tropa comum da mão</b> — os dois aumentam permanentemente sua capacidade máxima de Libação.
+    body: `No início do seu turno você pode <b>jogar 1 carta de bebida</b> (Consumo) ou <b>sacrificar 1 tropa comum da mão</b> — a bebida soma seu valor fixo e a tropa sacrificada soma Libação igual ao <b>custo dela</b>. Os dois aumentam permanentemente sua capacidade máxima de Libação.
     Sua Libação atual se renova cheia a cada turno, como "cristais de mana". É opcional: você pode passar a fase sem consumir nada.`
   },
   {
